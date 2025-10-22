@@ -1,6 +1,7 @@
 package rsm
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -15,9 +16,9 @@ import (
 var useRaftStateMachine bool // to plug in another raft besided raft1
 
 type Op struct {
-	Me  int       // server id
-	Req any       // client request
-	Id  uuid.UUID // unique identifier
+	Me  int    // server id
+	Req any    // client request
+	Id  string // unique identifier
 }
 type OpResult struct {
 	Req any
@@ -43,11 +44,13 @@ type RSM struct {
 	applyCh      chan raftapi.ApplyMsg
 	maxraftstate int // snapshot if log grows this big
 	sm           StateMachine
+	ps           *tester.Persister
+
 	// Your definitions here.
 	isLeader  bool
 	term      int
 	lastIndex int
-	opChMap   map[uuid.UUID]chan OpResult
+	opChMap   map[string]chan OpResult
 }
 
 // servers[] contains the ports of the set of
@@ -71,10 +74,12 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 		maxraftstate: maxraftstate,
 		applyCh:      make(chan raftapi.ApplyMsg),
 		sm:           sm,
-		opChMap:      map[uuid.UUID]chan OpResult{},
+		opChMap:      map[string]chan OpResult{},
+		ps:           persister,
 	}
 	if !useRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
+		rsm.sm.Restore(rsm.ps.ReadSnapshot())
 		go rsm.Reader()
 	}
 	return rsm
@@ -94,7 +99,7 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	// for example: op := Op{Me: rsm.me, Id: id, Req: req}, where req
 	// is the argument to Submit and id is a unique id for the op.
 	var op Op
-	op.Id = uuid.New()
+	op.Id = uuid.New().String()
 	op.Me = rsm.me
 	op.Req = req
 
@@ -114,38 +119,63 @@ func (rsm *RSM) Submit(req any) (rpc.Err, any) {
 	rsm.mu.Unlock()
 
 	// Wait with timeout
-
+	var response OpResult
 	select {
-	case opRes := <-ch:
-		if opRes.Err == rpc.ErrWrongLeader {
-			opRes.Req = nil
+	case result := <-ch:
+		if result.Err == rpc.ErrWrongLeader {
+			result.Req = nil
 		}
-		return opRes.Err, opRes.Req
+		response.Err, response.Req = result.Err, result.Req
 	case <-time.After(2 * time.Second):
-		return rpc.ErrWrongLeader, nil
+		response.Err, response.Req = rpc.ErrWrongLeader, nil
 	}
+	return response.Err, response.Req
 }
 
 func (rsm *RSM) Reader() {
 	for msg := range rsm.applyCh {
+		// DPrintf("[Reader]: message (%+v) {%d}", msg, rsm.me)
 
-		opReq := msg.Command.(Op)
-		result := OpResult{
-			Req: rsm.sm.DoOp(opReq.Req),
-			Err: rpc.OK,
-		}
+		if msg.CommandValid {
+			opReq := msg.Command.(Op)
+			result := OpResult{
+				Req: rsm.sm.DoOp(opReq.Req),
+				Err: rpc.OK,
+			}
 
-		rsm.mu.Lock()
-		if msg.CommandTerm != rsm.term {
-			// Wrong leader at time of commit
-			result.Err = rpc.ErrWrongLeader
-		}
-		// Notify waiting client if exists
-		if ch, ok := rsm.opChMap[opReq.Id]; ok {
-			ch <- result
-			delete(rsm.opChMap, opReq.Id) // clean up to avoid leaks
-		}
+			rsm.mu.Lock()
 
-		rsm.mu.Unlock()
+			// Check leadership after commit
+			if !rsm.isLeader {
+				result.Err = rpc.ErrWrongLeader
+			}
+
+			// Get waiting channel (no second lock)
+			ch, ok := rsm.opChMap[opReq.Id]
+			if ok {
+				delete(rsm.opChMap, opReq.Id)
+			}
+			if rsm.maxraftstate != -1 && rsm.maxraftstate < rsm.rf.PersistBytes() {
+				rsm.rf.Snapshot(msg.CommandIndex, rsm.sm.Snapshot())
+			}
+
+			rsm.mu.Unlock()
+
+			// Send result after unlock to avoid blocking while holding lock
+			if ok {
+				select {
+				case ch <- result:
+				default: // prevent blocking forever
+				}
+				close(ch)
+			}
+		} else if msg.SnapshotValid {
+			DPrintf("[SnapShot]: {%d}", rsm.me)
+			rsm.mu.Lock()
+			rsm.sm.Restore(msg.Snapshot)
+			rsm.mu.Unlock()
+		} else {
+			log.Fatalf("Invalid applyMsg, %+v\n", msg)
+		}
 	}
 }

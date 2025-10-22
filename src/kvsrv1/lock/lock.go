@@ -42,7 +42,7 @@ func (lk *Lock) Acquire() {
 				return
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 }

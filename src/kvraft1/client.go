@@ -17,11 +17,11 @@ type Clerk struct {
 	leaderId int32 // remember the last known leader
 
 	requestId int64
-	clientID  uuid.UUID
+	clientID  string
 }
 
 func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
-	ck := &Clerk{clnt: clnt, servers: servers, clientID: uuid.New()}
+	ck := &Clerk{clnt: clnt, servers: servers, clientID: uuid.New().String()}
 	// You'll have to add code here.
 	return ck
 }
@@ -49,7 +49,6 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 			}
 			break
 		}
-		time.Sleep(100 * time.Millisecond) // wait before retrying all servers again
 	}
 	return reply.Value, reply.Version, reply.Err
 }
@@ -93,13 +92,12 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 			break
 		}
 		ft = false
-		time.Sleep(100 * time.Millisecond)
 	}
 
 	return reply.Err
 }
 
-func (ck *Clerk) callLeader(rpcValue string, args interface{}, reply interface{}) bool {
+func (ck *Clerk) callLeader(rpcValue string, args interface{}, reply rpc.ReplyI) bool {
 
 	leader := int(atomic.LoadInt32(&ck.leaderId))
 	for i := 0; i < len(ck.servers); i++ {
@@ -108,18 +106,13 @@ func (ck *Clerk) callLeader(rpcValue string, args interface{}, reply interface{}
 
 		ok := ck.clnt.Call(ck.servers[index], rpcValue, args, reply)
 		if ok {
-			var err rpc.Err
-			switch rep := reply.(type) {
-			case *rpc.GetReply:
-				err = rep.Err
-			case *rpc.PutReply:
-				err = rep.Err
-			}
+			err := reply.GetErr()
 			if err != rpc.ErrWrongLeader {
 				atomic.StoreInt32(&ck.leaderId, int32(index))
 				return ok
 			}
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	return false

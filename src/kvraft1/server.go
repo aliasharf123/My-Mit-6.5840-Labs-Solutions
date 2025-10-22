@@ -1,6 +1,8 @@
 package kvraft
 
 import (
+	"bytes"
+	"log"
 	"sync"
 	"sync/atomic"
 
@@ -9,12 +11,15 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	tester "6.5840/tester1"
-	"github.com/google/uuid"
 )
 
 type Vav struct {
-	value   string
-	version rpc.Tversion
+	Value   string
+	Version rpc.Tversion
+}
+type Cache struct {
+	Seq int64
+	Req any
 }
 
 type KVServer struct {
@@ -24,9 +29,9 @@ type KVServer struct {
 	mu   sync.Mutex
 
 	// Your definitions here.
-	kvaStore map[string]Vav
-	lastSeen map[uuid.UUID]int64 // clientID → last executed Seq
-	lastResp map[uuid.UUID]any   // clientID → last reply
+	kvaStore    map[string]*Vav
+	cachesStore map[string]*Cache // clientID → cached
+
 }
 
 // To type-cast req to the right type, take a look at Go's type switches or type
@@ -35,27 +40,58 @@ type KVServer struct {
 // https://go.dev/tour/methods/16
 // https://go.dev/tour/methods/15
 func (kv *KVServer) DoOp(req any) any {
-	switch req := req.(type) {
-	case *rpc.GetArgs:
-		return kv.doGet(req)
-	case *rpc.PutArgs:
-		return kv.doPut(req)
-	default:
-		return nil
-	}
-}
-
-func (kv *KVServer) doGet(req *rpc.GetArgs) *rpc.GetReply {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
+	var clientId string
+	var seq int64
+
+	// Extract ClientId & Seq from the request
+	switch r := req.(type) {
+	case *rpc.GetArgs:
+		clientId, seq = r.ClientId, r.Seq
+	case *rpc.PutArgs:
+		clientId, seq = r.ClientId, r.Seq
+	default:
+		return nil // ignore unknown types
+	}
+
+	// Deduplication: ignore duplicate or old commands
+	if cached, ok := kv.isCacheHit(clientId, seq); ok {
+		return cached.Req
+	}
+
+	// Apply operation
+	var reply any
+	switch r := req.(type) {
+	case *rpc.GetArgs:
+		reply = kv.doGet(r)
+	case *rpc.PutArgs:
+		reply = kv.doPut(r)
+	}
+
+	// Save latest result for deduplication
+	kv.cachesStore[clientId] = &Cache{
+		Seq: seq,
+		Req: reply,
+	}
+
+	return reply
+}
+func (kv *KVServer) isCacheHit(cid string, seq int64) (*Cache, bool) {
+	if cache, ok := kv.cachesStore[cid]; ok && seq <= cache.Seq {
+		return cache, true
+	}
+	return nil, false
+}
+func (kv *KVServer) doGet(req *rpc.GetArgs) *rpc.GetReply {
 	reply := &rpc.GetReply{}
 	val, ok := kv.kvaStore[req.Key]
 	if !ok {
 		reply.Err = rpc.ErrNoKey
 	} else {
-		reply.Value = val.value
-		reply.Version = val.version
+		reply.Value = val.Value
+		reply.Version = val.Version
 		reply.Err = rpc.OK
 	}
 	return reply
@@ -63,27 +99,26 @@ func (kv *KVServer) doGet(req *rpc.GetArgs) *rpc.GetReply {
 
 // handle Put requests
 func (kv *KVServer) doPut(req *rpc.PutArgs) *rpc.PutReply {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
-
 	reply := &rpc.PutReply{}
 	val, ok := kv.kvaStore[req.Key]
 	if !ok {
 		if req.Version != 0 {
+			// rsm.DPrintf("[DoPut]: the state of store in {%d}: (%+v)", kv.me, kv.kvaStore)
 			reply.Err = rpc.ErrNoKey
 			return reply
 		}
 	} else {
-		if val.version != req.Version {
+		if val.Version != req.Version {
 			reply.Err = rpc.ErrVersion
+			// rsm.DPrintf("[DoPut Err Version]: the val = (%+v)", val)
 			return reply
 		}
 	}
 
 	// success path
-	kv.kvaStore[req.Key] = Vav{
-		version: req.Version + 1,
-		value:   req.Value,
+	kv.kvaStore[req.Key] = &Vav{
+		Version: req.Version + 1,
+		Value:   req.Value,
 	}
 
 	reply.Err = rpc.OK
@@ -91,79 +126,54 @@ func (kv *KVServer) doPut(req *rpc.PutArgs) *rpc.PutReply {
 }
 
 func (kv *KVServer) Snapshot() []byte {
-	// Your code here
-	return nil
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	e.Encode(kv.kvaStore)
+	e.Encode(kv.cachesStore)
+	return w.Bytes()
 }
 
 func (kv *KVServer) Restore(data []byte) {
-	// Your code here
+	if data == nil || len(data) < 1 {
+		return
+	}
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	var kvaStore map[string]*Vav
+	var cachesStore map[string]*Cache
+	if d.Decode(&kvaStore) != nil || d.Decode(&cachesStore) != nil {
+		log.Fatal("Decode error")
+		return
+	}
+
+	kv.cachesStore = cachesStore
+	kv.kvaStore = kvaStore
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
-	// Your code here. Use kv.rsm.Submit() to submit args
-	// You can use go's type casts to turn the any return value
-	// of Submit() into a GetReply: rep.(rpc.GetReply)
-
-	kv.mu.Lock()
-
-	if seq, ok := kv.lastSeen[args.ClientId]; ok && seq >= args.Seq {
-		if rep, ok := kv.lastResp[args.ClientId].(*rpc.GetReply); ok {
-			*reply = *rep
-		}
-		kv.mu.Unlock()
-		return
-	}
-	rsm := kv.rsm
-	kv.mu.Unlock()
-
-	err, res := rsm.Submit(args)
+	err, res := kv.rsm.Submit(args)
 	if err == rpc.ErrWrongLeader {
 		reply.Err = err
 		return
+	}
 
-	}
-	rep, ok := res.(*rpc.GetReply)
-	if ok {
-		reply.Err = rep.Err
-		reply.Value = rep.Value
-		reply.Version = rep.Version
-		kv.mu.Lock()
-		kv.lastSeen[args.ClientId] = args.Seq
-		kv.lastResp[args.ClientId] = rep
-		kv.mu.Unlock()
-	}
+	*reply = *res.(*rpc.GetReply)
 }
 
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
-	// Your code here. Use kv.rsm.Submit() to submit args
-	// You can use go's type casts to turn the any return value
-	// of Submit() into a PutReply: rep.(rpc.PutReply)
-
-	kv.mu.Lock()
-
-	if seq, seen := kv.lastSeen[args.ClientId]; seen && args.Seq <= seq {
-		// Already applied → return cached reply
-		cached := kv.lastResp[args.ClientId].(*rpc.PutReply)
-		reply.Err = cached.Err
-		kv.mu.Unlock()
-		return
-	}
-
-	rsm := kv.rsm
-	kv.mu.Unlock()
-	err, res := rsm.Submit(args)
+	err, res := kv.rsm.Submit(args)
 	if err == rpc.ErrWrongLeader {
 		reply.Err = err
 		return
 	}
-	rep, ok := res.(*rpc.PutReply)
-	if ok {
-		reply.Err = rep.Err
-		kv.mu.Lock()
-		kv.lastSeen[args.ClientId] = args.Seq
-		kv.lastResp[args.ClientId] = rep
-		kv.mu.Unlock()
-	}
+
+	*reply = *res.(*rpc.PutReply)
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -190,14 +200,17 @@ func StartKVServer(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, persist
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(rsm.Op{})
-	labgob.Register(rpc.PutArgs{})
-	labgob.Register(rpc.GetArgs{})
-
-	kv := &KVServer{me: me, kvaStore: make(map[string]Vav),
-		lastSeen: make(map[uuid.UUID]int64),
-		lastResp: make(map[uuid.UUID]any)}
+	labgob.Register(&rpc.PutArgs{})
+	labgob.Register(&rpc.GetArgs{})
+	labgob.Register(&rpc.PutReply{})
+	labgob.Register(&rpc.GetReply{})
+	labgob.Register(&Cache{})
+	labgob.Register(&Vav{})
+	kv := &KVServer{me: me, kvaStore: make(map[string]*Vav),
+		cachesStore: make(map[string]*Cache)}
 
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
+
 	// You may need initialization code here.
 	return []tester.IService{kv, kv.rsm.Raft()}
 }

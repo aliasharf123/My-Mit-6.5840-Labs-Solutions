@@ -1,7 +1,5 @@
 package rpc
 
-import "github.com/google/uuid"
-
 type Err string
 
 const (
@@ -16,6 +14,8 @@ const (
 	// For future kvraft lab
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrWrongGroup  = "ErrWrongGroup"
+
+	ErrTimeout = "ErrTimeout"
 )
 
 type Tversion uint64
@@ -24,22 +24,34 @@ type PutArgs struct {
 	Key      string
 	Value    string
 	Version  Tversion
-	ClientId uuid.UUID // unique client id
-	Seq      int64     // init (0)
+	ClientId string // unique client id
+	Seq      int64  // init (0)
+}
+
+type Reply struct {
+	Err Err
+}
+
+type ReplyI interface {
+	GetErr() Err
+}
+
+func (r *Reply) GetErr() Err {
+	return r.Err
 }
 
 type PutReply struct {
-	Err Err
+	Reply
 }
 
 type GetArgs struct {
 	Key      string
-	ClientId uuid.UUID // unique client id
-	Seq      int64     // init (0)
+	ClientId string // unique client id
+	Seq      int64  // init (0)
 }
 
 type GetReply struct {
 	Value   string
 	Version Tversion
-	Err     Err
+	Reply
 }
