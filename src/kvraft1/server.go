@@ -43,18 +43,8 @@ func (kv *KVServer) DoOp(req any) any {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	var clientId string
-	var seq int64
-
 	// Extract ClientId & Seq from the request
-	switch r := req.(type) {
-	case *rpc.GetArgs:
-		clientId, seq = r.ClientId, r.Seq
-	case *rpc.PutArgs:
-		clientId, seq = r.ClientId, r.Seq
-	default:
-		return nil // ignore unknown types
-	}
+	clientId, seq := req.(rpc.ClientMetaAccessor).GetClientMeta()
 
 	// Deduplication: ignore duplicate or old commands
 	if cached, ok := kv.isCacheHit(clientId, seq); ok {

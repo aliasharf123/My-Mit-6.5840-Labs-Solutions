@@ -38,7 +38,8 @@ func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	reqId := atomic.AddInt64(&ck.requestId, 1)
-	args := rpc.GetArgs{Key: key, ClientId: ck.clientID, Seq: reqId}
+	args := rpc.GetArgs{Args: rpc.Args{Key: key},
+		ClientMeta: rpc.ClientMeta{ClientId: ck.clientID, Seq: reqId}}
 	var reply rpc.GetReply
 
 	for {
@@ -74,11 +75,10 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
 	reqId := atomic.AddInt64(&ck.requestId, 1)
 	args := rpc.PutArgs{
-		Value:    value,
-		Key:      key,
-		Version:  version,
-		Seq:      reqId,
-		ClientId: ck.clientID,
+		Value:      value,
+		Args:       rpc.Args{Key: key},
+		Version:    version,
+		ClientMeta: rpc.ClientMeta{ClientId: ck.clientID, Seq: reqId},
 	}
 	reply := rpc.PutReply{}
 	ft := true // flag to check if its first try

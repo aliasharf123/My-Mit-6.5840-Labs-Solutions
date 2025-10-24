@@ -20,12 +20,35 @@ const (
 
 type Tversion uint64
 
-type PutArgs struct {
-	Key      string
-	Value    string
-	Version  Tversion
+type ClientMeta struct {
 	ClientId string // unique client id
 	Seq      int64  // init (0)
+}
+
+type ClientMetaAccessor interface {
+	GetClientMeta() (string, int64) // returns (ClientId, Seq)
+}
+
+func (c *ClientMeta) GetClientMeta() (string, int64) {
+	return c.ClientId, c.Seq
+}
+
+type Args struct {
+	Key string
+}
+type IArgs interface {
+	GetKey() string
+}
+
+func (a *Args) GetKey() string {
+	return a.Key
+}
+
+type PutArgs struct {
+	Args
+	Value   string
+	Version Tversion
+	ClientMeta
 }
 
 type Reply struct {
@@ -45,9 +68,8 @@ type PutReply struct {
 }
 
 type GetArgs struct {
-	Key      string
-	ClientId string // unique client id
-	Seq      int64  // init (0)
+	Args
+	ClientMeta
 }
 
 type GetReply struct {

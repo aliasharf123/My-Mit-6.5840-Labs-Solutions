@@ -33,7 +33,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// You will have to modify this function.
 	reply := rpc.GetReply{}
 	args := rpc.GetArgs{
-		Key: key,
+		Args: rpc.Args{Key: key},
 	}
 
 	for {
@@ -71,7 +71,7 @@ func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
 
 	args := rpc.PutArgs{
 		Value:   value,
-		Key:     key,
+		Args:    rpc.Args{Key: key},
 		Version: version,
 	}
 	reply := rpc.PutReply{}

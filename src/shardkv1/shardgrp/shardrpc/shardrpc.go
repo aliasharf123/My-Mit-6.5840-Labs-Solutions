@@ -8,29 +8,32 @@ import (
 type FreezeShardArgs struct {
 	Shard shardcfg.Tshid
 	Num   shardcfg.Tnum
+	rpc.ClientMeta
 }
 
 type FreezeShardReply struct {
 	State []byte
 	Num   shardcfg.Tnum
-	Err   rpc.Err
+	rpc.Reply
 }
 
 type InstallShardArgs struct {
 	Shard shardcfg.Tshid
 	State []byte
 	Num   shardcfg.Tnum
+	rpc.ClientMeta
 }
 
 type InstallShardReply struct {
-	Err rpc.Err
+	rpc.Reply
 }
 
 type DeleteShardArgs struct {
 	Shard shardcfg.Tshid
 	Num   shardcfg.Tnum
+	rpc.ClientMeta
 }
 
 type DeleteShardReply struct {
-	Err rpc.Err
+	rpc.Reply
 }
