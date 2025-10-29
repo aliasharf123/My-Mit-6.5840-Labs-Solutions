@@ -107,8 +107,12 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 		Num:        num,
 		ClientMeta: rpc.ClientMeta{ClientId: ck.clientID, Seq: reqId}}
 	var reply shardrpc.FreezeShardReply
+
 	for {
 		ok := ck.callLeader("KVServer.FreezeShard", &args, &reply)
+		if !ok && reply.Err == "" {
+			return nil, rpc.ErrMaybe
+		}
 		if ok {
 			return reply.State, reply.Err
 		}
@@ -123,8 +127,12 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 		State:      state,
 		ClientMeta: rpc.ClientMeta{ClientId: ck.clientID, Seq: reqId}}
 	var reply shardrpc.InstallShardReply
+
 	for {
 		ok := ck.callLeader("KVServer.InstallShard", &args, &reply)
+		if !ok && reply.Err == "" {
+			return rpc.ErrMaybe
+		}
 		if ok {
 			return reply.Err
 		}
@@ -138,8 +146,12 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 		Num:        num,
 		ClientMeta: rpc.ClientMeta{ClientId: ck.clientID, Seq: reqId}}
 	var reply shardrpc.DeleteShardReply
+
 	for {
 		ok := ck.callLeader("KVServer.DeleteShard", &args, &reply)
+		if !ok && reply.Err == "" {
+			return rpc.ErrMaybe
+		}
 		if ok {
 			return reply.Err
 		}

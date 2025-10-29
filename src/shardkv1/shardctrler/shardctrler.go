@@ -18,6 +18,10 @@ import (
 	tester "6.5840/tester1"
 )
 
+const (
+	FINISHED = "Finished"
+)
+
 // ShardCtrler for the controller and kv clerk.
 type ShardCtrler struct {
 	clnt *tester.Clnt
@@ -66,7 +70,7 @@ func (sck *ShardCtrler) InitController() {
 	{
 		key := "NextConfig" + strconv.Itoa(int(config.Num)+1)
 		value, _, err := sck.IKVClerk.Get(key)
-		if err != rpc.ErrNoKey {
+		if err != rpc.ErrNoKey && value != FINISHED {
 			sck.ChangeConfigTo(shardcfg.FromString(value))
 		}
 	}
@@ -99,35 +103,30 @@ func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
 		return
 	}
 
-	var clnt *shardgrp.Clerk
-
 	frozenShards := make(map[shardcfg.Tshid][]byte)
 	for shard, newG := range newConfig.Shards {
 		oldG := oldCfg.Shards[shard]
 		shardId := shardcfg.Tshid(shard)
 
 		if oldG != newG {
-			clnt = sck.getClerkForShard(oldG, oldCfg)
-			data, _ := clnt.FreezeShard(shardId, newConfig.Num)
+			data, isFinished := sck.requestFreezeShard(oldG, oldCfg, shardId, newConfig)
+			if isFinished {
+				return
+			}
 			frozenShards[shardId] = data
 		}
 	}
 
 	for shardId, data := range frozenShards {
-		newG := newConfig.Shards[shardId]
-		clnt = sck.getClerkForShard(newG, newConfig)
-		clnt.InstallShard(shardId, data, newConfig.Num)
+		isFinished := sck.requestInstallShard(shardId, newConfig, data)
+		if isFinished {
+			return
+		}
 	}
 
 	for shardId := range frozenShards {
-		oldG := oldCfg.Shards[shardId]
-		if _, ok := newConfig.Groups[oldG]; ok {
-			clnt = sck.getClerkForShard(oldG, oldCfg)
-			clnt.DeleteShard(shardId, newConfig.Num)
-		} else {
-			sck.mu.Lock()
-			delete(sck.group2clerk, oldG)
-			sck.mu.Unlock()
+		if isFinished := sck.requestDeleteShard(oldCfg, shardId, newConfig); isFinished {
+			return
 		}
 	}
 
@@ -152,12 +151,12 @@ func (sck *ShardCtrler) acquire(new *shardcfg.ShardConfig) (bool, *shardcfg.Shar
 		return true, new
 	}
 	start := time.Now() // Start timer
-	ms := 2200 + (rand.Int63() % 1000)
+	ms := 3200 + (rand.Int63() % 1000)
 	for {
 		// loop until the key's released
 		value, version, err := sck.IKVClerk.Get(key)
 		if err == rpc.OK {
-			if value == "Finished" {
+			if value == FINISHED {
 				return false, nil
 			} else if time.Since(start) > time.Duration(ms) {
 				err := sck.IKVClerk.Put(key, value, version)
@@ -173,5 +172,74 @@ func (sck *ShardCtrler) acquire(new *shardcfg.ShardConfig) (bool, *shardcfg.Shar
 func (sck *ShardCtrler) finished(new *shardcfg.ShardConfig) {
 	key := "NextConfig" + strconv.Itoa(int(new.Num))
 	_, version, _ := sck.IKVClerk.Get(key)
-	sck.IKVClerk.Put(key, "Finished", version)
+	sck.IKVClerk.Put(key, FINISHED, version)
+}
+
+func (sck *ShardCtrler) requestFreezeShard(oldG tester.Tgid,
+	oldCfg *shardcfg.ShardConfig,
+	shardId shardcfg.Tshid,
+	new *shardcfg.ShardConfig) ([]byte, bool) {
+
+	clnt := sck.getClerkForShard(oldG, oldCfg)
+	for {
+		data, err := clnt.FreezeShard(shardId, new.Num)
+
+		if err == rpc.ErrMaybe {
+			value, _, _ := sck.IKVClerk.Get("NextConfig" + strconv.Itoa(int(new.Num)))
+			if value == FINISHED {
+				return nil, true
+			}
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		return data, false
+	}
+}
+func (sck *ShardCtrler) requestInstallShard(shardId shardcfg.Tshid,
+	new *shardcfg.ShardConfig,
+	data []byte) bool {
+	newG := new.Shards[shardId]
+	clnt := sck.getClerkForShard(newG, new)
+
+	for {
+		err := clnt.InstallShard(shardId, data, new.Num)
+		if err == rpc.ErrMaybe {
+			value, _, _ := sck.IKVClerk.Get("NextConfig" + strconv.Itoa(int(new.Num)))
+			if value == FINISHED {
+				return true
+			}
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		return false
+	}
+}
+func (sck *ShardCtrler) requestDeleteShard(oldCfg *shardcfg.ShardConfig,
+	shardId shardcfg.Tshid,
+	new *shardcfg.ShardConfig) bool {
+	oldG := oldCfg.Shards[shardId]
+	var isFinished bool
+	if _, ok := new.Groups[oldG]; ok {
+		clnt := sck.getClerkForShard(oldG, oldCfg)
+
+		for {
+			err := clnt.DeleteShard(shardId, new.Num)
+			if err == rpc.ErrMaybe {
+				value, _, _ := sck.IKVClerk.Get("NextConfig" + strconv.Itoa(int(new.Num)))
+				if value == FINISHED {
+					isFinished = true
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			isFinished = false
+			break
+		}
+	} else {
+		sck.mu.Lock()
+		delete(sck.group2clerk, oldG)
+		sck.mu.Unlock()
+	}
+	return isFinished
 }

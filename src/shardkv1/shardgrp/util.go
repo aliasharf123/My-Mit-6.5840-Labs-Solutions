@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"6.5840/kvsrv1/rpc"
+	"6.5840/shardkv1/shardgrp/shardrpc"
 )
 
 // Debugging
@@ -24,6 +25,7 @@ func (kv *KVServer) deepCopyShard(shard *ShardData) *ShardData {
 		ConfigNum: shard.ConfigNum,
 		KvStore:   nil,
 		Cache:     nil,
+		ShardOps:  nil,
 	}
 
 	// Deep copy KvStore map
@@ -44,6 +46,32 @@ func (kv *KVServer) deepCopyShard(shard *ShardData) *ShardData {
 			shardCopy.Cache[clientId] = &Cache{
 				Seq: cache.Seq,
 				Req: deepCopyReq(cache.Req), // Need to copy the request too
+			}
+		}
+	}
+	// Deep copy ShardOps
+	if shard.ShardOps != nil {
+		shardCopy.ShardOps = &ShardOperationState{}
+
+		// Copy FreezeData if available
+		if shard.ShardOps.FreezeData != nil {
+			f := shard.ShardOps.FreezeData
+			shardCopy.ShardOps.FreezeData = &shardrpc.FreezeShardReply{
+				Num: f.Num,
+				Reply: rpc.Reply{
+					Err: f.Reply.Err,
+				},
+				State: append([]byte{}, f.State...), // copy byte slice
+			}
+		}
+
+		// Copy InstallData if available
+		if shard.ShardOps.InstallData != nil {
+			i := shard.ShardOps.InstallData
+			shardCopy.ShardOps.InstallData = &shardrpc.InstallShardReply{
+				Reply: rpc.Reply{
+					Err: i.Reply.Err,
+				},
 			}
 		}
 	}

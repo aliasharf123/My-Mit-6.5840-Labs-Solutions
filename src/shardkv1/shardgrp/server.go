@@ -35,8 +35,14 @@ const (
 type ShardData struct {
 	KvStore   map[string]*Vav
 	Cache     map[string]*Cache
+	ShardOps  *ShardOperationState
 	Status    ShardStatus
 	ConfigNum shardcfg.Tnum
+}
+type ShardOperationState struct {
+	FreezeData  *shardrpc.FreezeShardReply
+	InstallData *shardrpc.InstallShardReply
+	// DeleteData  *shardrpc.DeleteShardReply
 }
 
 type KVServer struct {
@@ -176,8 +182,14 @@ func (kv *KVServer) doFreezeShard(args *shardrpc.FreezeShardArgs) *shardrpc.Free
 
 	if shard.ConfigNum > args.Num {
 		return &shardrpc.FreezeShardReply{}
+	} else if shard.ConfigNum == args.Num {
+		if shard.ShardOps != nil && shard.ShardOps.FreezeData != nil {
+			return shard.ShardOps.FreezeData
+		}
 	}
-
+	if shard.ShardOps == nil {
+		shard.ShardOps = &ShardOperationState{}
+	}
 	shard.Status = ShardFrozen
 	reply := &shardrpc.FreezeShardReply{
 		Num:   args.Num,
@@ -185,7 +197,7 @@ func (kv *KVServer) doFreezeShard(args *shardrpc.FreezeShardArgs) *shardrpc.Free
 		State: kv.encodeShards(args.Shard),
 	}
 	shard.ConfigNum = args.Num
-
+	shard.ShardOps.FreezeData = reply
 	return reply
 }
 
@@ -197,13 +209,19 @@ func (kv *KVServer) doInstallShard(args *shardrpc.InstallShardArgs) *shardrpc.In
 
 	if shard.ConfigNum > args.Num {
 		return reply
+	} else if shard.ConfigNum == args.Num {
+		if shard.ShardOps != nil && shard.ShardOps.InstallData != nil {
+			return shard.ShardOps.InstallData
+		}
 	}
-
+	if shard.ShardOps == nil {
+		shard.ShardOps = &ShardOperationState{}
+	}
 	reply.Err = rpc.OK
 	kv.shards[shardID] = kv.decodeShards(args.State)
 	kv.shards[shardID].Status = ShardOwned
 	kv.shards[shardID].ConfigNum = args.Num
-
+	kv.shards[shardID].ShardOps.InstallData = reply
 	return reply
 }
 
@@ -221,6 +239,7 @@ func (kv *KVServer) doDeleteShard(args *shardrpc.DeleteShardArgs) *shardrpc.Dele
 		Status:    ShardNotOwned,
 		KvStore:   nil,
 		Cache:     nil,
+		ShardOps:  nil,
 		ConfigNum: args.Num,
 	}
 	reply.Err = rpc.OK
@@ -377,6 +396,7 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	labgob.Register(&shardrpc.FreezeShardReply{})
 	labgob.Register(&shardrpc.InstallShardReply{})
 	labgob.Register(&shardrpc.DeleteShardReply{})
+	labgob.Register(&ShardOperationState{})
 	labgob.Register(rsm.Op{})
 	labgob.Register(&rpc.PutArgs{})
 	labgob.Register(&rpc.GetArgs{})
@@ -391,8 +411,9 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 
 	for sid := range shardcfg.NShards {
 		kv.shards[sid] = &ShardData{
-			KvStore: make(map[string]*Vav),
-			Cache:   make(map[string]*Cache),
+			KvStore:  make(map[string]*Vav),
+			Cache:    make(map[string]*Cache),
+			ShardOps: &ShardOperationState{},
 		}
 		if gid == 1 {
 			kv.shards[sid].Status = ShardOwned
