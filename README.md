@@ -13,7 +13,7 @@ This repository contains my personal solutions to the **MIT 6.5840 Distributed S
 | Lab 2 | Key/Value Server | ✅ Completed |
 | Lab 3 | Raft Consensus Algorithm | ✅ Completed |
 | Lab 4 | Fault-Tolerant Key/Value Service using Raft | ✅ Completed |
-| Lab 5 | Sharded Key/Value Store | ✅ Completed |
+| Lab 5 | Sharded Key/Value Store | ⏳ Not Fully Completed |
 | Lab 5 | Extended Features | 🔧 Not Started |
 
 Each lab builds on the previous one, eventually forming a replicated and sharded fault-tolerant distributed key/value store.
