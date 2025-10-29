@@ -2,7 +2,6 @@ package shardgrp
 
 import (
 	"sync/atomic"
-	"time"
 
 	"6.5840/kvsrv1/rpc"
 	"6.5840/shardkv1/shardcfg"
@@ -33,19 +32,13 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 
 	for {
 		ok := ck.callLeader("KVServer.Get", &args, &reply)
-		DPrintf("[shard client Get]: (%+v) clId=(%s) seq=(%d) (%d)", reply.Err, ck.clientID, reqId, ok)
 
-		if !ok && reply.Err == "" {
+		if ok {
+			return reply.Value, reply.Version, reply.Err
+		} else if reply.Err == "" {
 			return "", 0, rpc.ErrWrongGroup
 		}
-		if ok {
-			if reply.Err != rpc.OK {
-				return reply.Value, reply.Version, reply.Err
-			}
-			break
-		}
 	}
-	return reply.Value, reply.Version, reply.Err
 }
 
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
@@ -62,21 +55,17 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 
 	for {
 		ok := ck.callLeader("KVServer.Put", &args, &reply)
-		DPrintf("[shard client Put]: (%+v) clId=(%s) seq=(%d) (%d)", reply.Err, ck.clientID, reqId, ok)
 
-		if !ok && reply.Err == "" && !ft {
-			return rpc.ErrWrongGroup
-		}
 		if ok {
 			if !ft && reply.Err == rpc.ErrVersion {
 				return rpc.ErrMaybe
 			}
-			break
+			return reply.Err
+		} else if reply.Err == "" && !ft {
+			return rpc.ErrWrongGroup
 		}
 		ft = false
 	}
-
-	return reply.Err
 }
 func (ck *Clerk) callLeader(rpcValue string, args interface{}, reply rpc.ReplyI) bool {
 
@@ -87,7 +76,6 @@ func (ck *Clerk) callLeader(rpcValue string, args interface{}, reply rpc.ReplyI)
 		reply.SetErr("")
 
 		ok := ck.clnt.Call(ck.servers[index], rpcValue, args, reply)
-		DPrintf("[callLeader]: (%+v) clId=(%s) server=(%s) (%v)(%s)", reply.GetErr(), ck.clientID, ck.servers[index], ok, rpcValue)
 		if ok {
 			err := reply.GetErr()
 			if err != rpc.ErrWrongLeader {
@@ -95,7 +83,6 @@ func (ck *Clerk) callLeader(rpcValue string, args interface{}, reply rpc.ReplyI)
 				return ok
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
 	return false
 }
@@ -110,11 +97,10 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 
 	for {
 		ok := ck.callLeader("KVServer.FreezeShard", &args, &reply)
-		if !ok && reply.Err == "" {
-			return nil, rpc.ErrMaybe
-		}
 		if ok {
 			return reply.State, reply.Err
+		} else if reply.Err == "" {
+			return nil, rpc.ErrMaybe
 		}
 	}
 }
@@ -130,11 +116,11 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 
 	for {
 		ok := ck.callLeader("KVServer.InstallShard", &args, &reply)
-		if !ok && reply.Err == "" {
-			return rpc.ErrMaybe
-		}
+
 		if ok {
 			return reply.Err
+		} else if reply.Err == "" {
+			return rpc.ErrMaybe
 		}
 	}
 }
@@ -149,11 +135,11 @@ func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
 
 	for {
 		ok := ck.callLeader("KVServer.DeleteShard", &args, &reply)
-		if !ok && reply.Err == "" {
-			return rpc.ErrMaybe
-		}
+
 		if ok {
 			return reply.Err
+		} else if reply.Err == "" {
+			return rpc.ErrMaybe
 		}
 	}
 }

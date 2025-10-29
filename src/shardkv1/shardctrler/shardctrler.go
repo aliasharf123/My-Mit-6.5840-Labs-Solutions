@@ -146,12 +146,11 @@ func (sck *ShardCtrler) Query() *shardcfg.ShardConfig {
 func (sck *ShardCtrler) acquire(new *shardcfg.ShardConfig) (bool, *shardcfg.ShardConfig) {
 	key := "NextConfig" + strconv.Itoa(int(new.Num))
 
-	err := sck.IKVClerk.Put(key, new.String(), 0)
-	if err == rpc.OK {
+	if err := sck.IKVClerk.Put(key, new.String(), 0); err == rpc.OK {
 		return true, new
 	}
 	start := time.Now() // Start timer
-	ms := 3200 + (rand.Int63() % 1000)
+	ms := 3000 + (rand.Int63() % 1000)
 	for {
 		// loop until the key's released
 		value, version, err := sck.IKVClerk.Get(key)
@@ -189,7 +188,6 @@ func (sck *ShardCtrler) requestFreezeShard(oldG tester.Tgid,
 			if value == FINISHED {
 				return nil, true
 			}
-			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		return data, false
@@ -208,7 +206,6 @@ func (sck *ShardCtrler) requestInstallShard(shardId shardcfg.Tshid,
 			if value == FINISHED {
 				return true
 			}
-			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		return false
@@ -230,7 +227,6 @@ func (sck *ShardCtrler) requestDeleteShard(oldCfg *shardcfg.ShardConfig,
 					isFinished = true
 					break
 				}
-				time.Sleep(100 * time.Millisecond)
 				continue
 			}
 			isFinished = false

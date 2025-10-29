@@ -10,7 +10,6 @@ package shardkv
 
 import (
 	"sync"
-	"time"
 
 	"6.5840/kvsrv1/rpc"
 	kvtest "6.5840/kvtest1"
@@ -55,7 +54,6 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 
 		if err == rpc.ErrWrongGroup {
 			ck.refreshConfig()
-			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 
@@ -73,7 +71,6 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 
 		if err == rpc.ErrWrongGroup {
 			ck.refreshConfig()
-			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		return err

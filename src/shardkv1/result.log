@@ -1,61 +1,95 @@
-❯ time go test -v
+> go test -v
 === RUN   TestInitQuery5A
 Test (5A): Init and Query ... (reliable network)...
   ... Passed --  time  0.0s #peers 1 #RPCs     2 #Ops    0
 --- PASS: TestInitQuery5A (0.00s)
 === RUN   TestStaticOneShardGroup5A
 Test (5A): one shard group ... (reliable network)...
-  ... Passed --  time  1.7s #peers 1 #RPCs   698 #Ops  180
---- PASS: TestStaticOneShardGroup5A (1.69s)
+  ... Passed --  time  1.0s #peers 1 #RPCs  5551 #Ops  180
+--- PASS: TestStaticOneShardGroup5A (1.04s)
 === RUN   TestJoinBasic5A
 Test (5A): a group joins... (reliable network)...
-  ... Passed --  time  7.3s #peers 1 #RPCs  2688 #Ops  180
---- PASS: TestJoinBasic5A (7.30s)
+  ... Passed --  time  5.9s #peers 1 #RPCs 37838 #Ops  180
+--- PASS: TestJoinBasic5A (5.94s)
 === RUN   TestDeleteBasic5A
 Test (5A): delete ... (reliable network)...
-  ... Passed --  time  3.2s #peers 1 #RPCs  1156 #Ops  360
---- PASS: TestDeleteBasic5A (3.18s)
+  ... Passed --  time  1.3s #peers 1 #RPCs 10740 #Ops  360
+--- PASS: TestDeleteBasic5A (1.27s)
 === RUN   TestJoinLeaveBasic5A
 Test (5A): basic groups join/leave ... (reliable network)...
-  ... Passed --  time  9.6s #peers 1 #RPCs  2469 #Ops  240
---- PASS: TestJoinLeaveBasic5A (9.56s)
+  ... Passed --  time  6.2s #peers 1 #RPCs 27988 #Ops  240
+--- PASS: TestJoinLeaveBasic5A (6.25s)
 === RUN   TestManyJoinLeaveReliable5A
 Test (5A): many groups join/leave ... (reliable network)...
-  ... Passed --  time 25.6s #peers 1 #RPCs  3501 #Ops  180
---- PASS: TestManyJoinLeaveReliable5A (25.57s)
+  ... Passed --  time 14.4s #peers 1 #RPCs  7660 #Ops  180
+--- PASS: TestManyJoinLeaveReliable5A (14.44s)
 === RUN   TestManyJoinLeaveUnreliable5A
 Test (5A): many groups join/leave ... (unreliable network)...
-  ... Passed --  time 117.0s #peers 1 #RPCs  9450 #Ops  180
---- PASS: TestManyJoinLeaveUnreliable5A (116.99s)
+  ... Passed --  time 51.3s #peers 1 #RPCs  5652 #Ops  180
+--- PASS: TestManyJoinLeaveUnreliable5A (51.32s)
 === RUN   TestShutdown5A
 Test (5A): shutdown ... (reliable network)...
-  ... Passed --  time 16.9s #peers 1 #RPCs  1636 #Ops  180
---- PASS: TestShutdown5A (16.91s)
+  ... Passed --  time  9.0s #peers 1 #RPCs  5192 #Ops  180
+--- PASS: TestShutdown5A (8.98s)
 === RUN   TestProgressShutdown5A
 Test (5A): progress ... (reliable network)...
-  ... Passed --  time  7.6s #peers 1 #RPCs   728 #Ops   82
---- PASS: TestProgressShutdown5A (7.58s)
+  ... Passed --  time  4.6s #peers 1 #RPCs  2966 #Ops   82
+--- PASS: TestProgressShutdown5A (4.64s)
 === RUN   TestProgressJoin5A
 Test (5A): progress ... (reliable network)...
-  ... Passed --  time 15.4s #peers 1 #RPCs  1496 #Ops  170
---- PASS: TestProgressJoin5A (15.41s)
+  ... Passed --  time  9.6s #peers 1 #RPCs  5077 #Ops  346
+--- PASS: TestProgressJoin5A (9.58s)
 === RUN   TestOneConcurrentClerkReliable5A
 Test (5A): one concurrent clerk reliable... (reliable network)...
-  ... Passed --  time 21.2s #peers 1 #RPCs  2959 #Ops  668
---- PASS: TestOneConcurrentClerkReliable5A (21.24s)
+  ... Passed --  time 20.1s #peers 1 #RPCs  5785 #Ops  958
+--- PASS: TestOneConcurrentClerkReliable5A (20.12s)
 === RUN   TestManyConcurrentClerkReliable5A
 Test (5A): many concurrent clerks reliable... (reliable network)...
-  ... Passed --  time 25.4s #peers 1 #RPCs  3104 #Ops  684
---- PASS: TestManyConcurrentClerkReliable5A (25.38s)
+  ... Passed --  time 23.7s #peers 1 #RPCs  8311 #Ops  920
+--- PASS: TestManyConcurrentClerkReliable5A (23.70s)
 === RUN   TestOneConcurrentClerkUnreliable5A
 Test (5A): one concurrent clerk unreliable ... (unreliable network)...
-  ... Passed --  time 62.8s #peers 1 #RPCs  4604 #Ops   54
---- PASS: TestOneConcurrentClerkUnreliable5A (62.76s)
+  ... Passed --  time 32.9s #peers 1 #RPCs  3214 #Ops  108
+--- PASS: TestOneConcurrentClerkUnreliable5A (32.87s)
 === RUN   TestManyConcurrentClerkUnreliable5A
 Test (5A): many concurrent clerks unreliable... (unreliable network)...
-  ... Passed --  time 60.9s #peers 1 #RPCs  4797 #Ops  256
---- PASS: TestManyConcurrentClerkUnreliable5A (60.92s)
+  ... Passed --  time 38.8s #peers 1 #RPCs  4183 #Ops  486
+--- PASS: TestManyConcurrentClerkUnreliable5A (38.81s)
 === RUN   TestJoinLeave5B
 Test (5B): Join/leave while a shardgrp is down... (reliable network)...
-  ... Passed --  time  7.1s #peers 1 #RPCs   594 #Ops  120
---- PASS: TestJoinLeave5B (7.08s)
+  ... Passed --  time  5.6s #peers 1 #RPCs  2218 #Ops  120
+--- PASS: TestJoinLeave5B (5.56s)
+=== RUN   TestRecoverCtrler5B
+Test (5B): recover controller ... (reliable network)...
+  ... Passed --  time 29.7s #peers 1 #RPCs  6997 #Ops  360
+--- PASS: TestRecoverCtrler5B (29.66s)
+=== RUN   TestConcurrentReliable5C
+Test (5C): Concurrent ctrlers ... (reliable network)...
+  ... Passed --  time  6.6s #peers 1 #RPCs  3894 #Ops  120
+--- PASS: TestConcurrentReliable5C (6.55s)
+=== RUN   TestAcquireLockConcurrentUnreliable5C
+Test (5C): Concurrent ctrlers ... (unreliable network)...
+  ... Passed --  time 45.0s #peers 1 #RPCs  2646 #Ops  120
+--- PASS: TestAcquireLockConcurrentUnreliable5C (45.00s)
+=== RUN   TestPartitionControllerJoin5C
+Test (5C): partition controller in join... (reliable network)...
+  ... Passed --  time  5.3s #peers 1 #RPCs  2012 #Ops  120
+--- PASS: TestPartitionControllerJoin5C (5.28s)
+=== RUN   TestPartitionRecoveryReliableNoClerk5C
+Test (5C): controllers with leased leadership ... (reliable network)...
+  ... Passed --  time 32.8s #peers 1 #RPCs  8870 #Ops  360
+--- PASS: TestPartitionRecoveryReliableNoClerk5C (32.80s)
+=== RUN   TestPartitionRecoveryUnreliableNoClerk5C
+Test (5C): controllers with leased leadership ... (unreliable network)...
+  ... Passed --  time 100.2s #peers 1 #RPCs  3977 #Ops  240
+--- PASS: TestPartitionRecoveryUnreliableNoClerk5C (100.18s)
+=== RUN   TestPartitionRecoveryReliableClerks5C
+Test (5C): controllers with leased leadership ... (reliable network)...
+  ... Passed --  time 63.2s #peers 1 #RPCs 16193 #Ops  980
+--- PASS: TestPartitionRecoveryReliableClerks5C (63.18s)
+=== RUN   TestPartitionRecoveryUnreliableClerks5C
+Test (5C): controllers with leased leadership ... (unreliable network)...
+  ... Passed --  time 62.5s #peers 1 #RPCs  5358 #Ops  442
+--- PASS: TestPartitionRecoveryUnreliableClerks5C (62.53s)
+PASS
+ok  	6.5840/shardkv1	569.716s
