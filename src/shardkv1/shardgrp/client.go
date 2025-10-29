@@ -33,9 +33,14 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 
 	for {
 		ok := ck.callLeader("KVServer.Get", &args, &reply)
+		DPrintf("[shard client Get]: (%+v) clId=(%s) seq=(%d) (%d)", reply.Err, ck.clientID, reqId, ok)
+
+		if !ok && reply.Err == "" {
+			return "", 0, rpc.ErrWrongGroup
+		}
 		if ok {
 			if reply.Err != rpc.OK {
-				return "", 0, reply.Err
+				return reply.Value, reply.Version, reply.Err
 			}
 			break
 		}
@@ -57,6 +62,11 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 
 	for {
 		ok := ck.callLeader("KVServer.Put", &args, &reply)
+		DPrintf("[shard client Put]: (%+v) clId=(%s) seq=(%d) (%d)", reply.Err, ck.clientID, reqId, ok)
+
+		if !ok && reply.Err == "" && !ft {
+			return rpc.ErrWrongGroup
+		}
 		if ok {
 			if !ft && reply.Err == rpc.ErrVersion {
 				return rpc.ErrMaybe
@@ -74,8 +84,10 @@ func (ck *Clerk) callLeader(rpcValue string, args interface{}, reply rpc.ReplyI)
 	for i := 0; i < len(ck.servers); i++ {
 		// cycle from known leaderId
 		index := (leader + i) % len(ck.servers)
+		reply.SetErr("")
 
 		ok := ck.clnt.Call(ck.servers[index], rpcValue, args, reply)
+		DPrintf("[callLeader]: (%+v) clId=(%s) server=(%s) (%v)(%s)", reply.GetErr(), ck.clientID, ck.servers[index], ok, rpcValue)
 		if ok {
 			err := reply.GetErr()
 			if err != rpc.ErrWrongLeader {

@@ -57,10 +57,14 @@ type Reply struct {
 
 type ReplyI interface {
 	GetErr() Err
+	SetErr(err Err)
 }
 
 func (r *Reply) GetErr() Err {
 	return r.Err
+}
+func (r *Reply) SetErr(err Err) {
+	r.Err = err
 }
 
 type PutReply struct {

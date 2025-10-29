@@ -24,10 +24,19 @@ type Cache struct {
 	Req any
 }
 
+type ShardStatus int
+
+const (
+	ShardNotOwned ShardStatus = iota // shard not currently owned by this group
+	ShardOwned                       // shard is owned and active
+	ShardFrozen                      // shard is frozen during migration
+)
+
 type ShardData struct {
-	KvStore  map[string]*Vav
-	Cache    map[string]*Cache
-	IsFrozen bool
+	KvStore   map[string]*Vav
+	Cache     map[string]*Cache
+	Status    ShardStatus
+	ConfigNum shardcfg.Tnum
 }
 
 type KVServer struct {
@@ -39,20 +48,9 @@ type KVServer struct {
 	mu sync.Mutex
 
 	// Your definitions here.
-	shards           map[shardcfg.Tshid]*ShardData
-	currentConfigNum shardcfg.Tnum
+	shards [shardcfg.NShards]*ShardData
 }
 
-func (kv *KVServer) isWrongGroup(key string) (*ShardData, bool) {
-	shardID := shardcfg.Key2Shard(key)
-
-	shard, ok := kv.shards[shardID]
-	if !ok || shard == nil {
-		// This shard does not exist here, so wrong group
-		return shard, true
-	}
-	return shard, false
-}
 func getShardID(req any) shardcfg.Tshid {
 	switch r := req.(type) {
 	case rpc.IArgs:
@@ -71,6 +69,7 @@ func getShardID(req any) shardcfg.Tshid {
 func (kv *KVServer) DoOp(req any) any {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+	DPrintf("[DoOp]: (%+v) {%d}", req, kv.me)
 
 	// Extract ClientId & Seq & Key from the request
 	clientId, seq := req.(rpc.ClientMetaAccessor).GetClientMeta()
@@ -78,7 +77,6 @@ func (kv *KVServer) DoOp(req any) any {
 	if cached, ok := kv.isCacheHit(clientId, seq, shardId); ok {
 		return cached.Req
 	}
-
 	// Apply operation
 	var reply any
 	switch r := req.(type) {
@@ -95,8 +93,7 @@ func (kv *KVServer) DoOp(req any) any {
 	}
 
 	// Save latest result for deduplication
-	shard := kv.shards[shardId]
-	if shard != nil {
+	if shard := kv.shards[shardId]; shard.Cache != nil {
 		kv.shards[shardId].Cache[clientId] = &Cache{
 			Seq: seq,
 			Req: reply,
@@ -107,7 +104,7 @@ func (kv *KVServer) DoOp(req any) any {
 }
 func (kv *KVServer) isCacheHit(cid string, seq int64, shardID shardcfg.Tshid) (*Cache, bool) {
 	shard := kv.shards[shardID]
-	if shard == nil {
+	if shard.Cache == nil {
 		return nil, false
 	}
 	if cache, ok := shard.Cache[cid]; ok && seq <= cache.Seq {
@@ -118,10 +115,11 @@ func (kv *KVServer) isCacheHit(cid string, seq int64, shardID shardcfg.Tshid) (*
 
 func (kv *KVServer) doGet(req *rpc.GetArgs) *rpc.GetReply {
 	reply := &rpc.GetReply{}
+	DPrintf("[doGet]: (%+v) s{%d}", req, kv.me)
 
 	// Check if shard belongs to this group
-	shard, wrong := kv.isWrongGroup(req.Key)
-	if wrong {
+	shard := kv.shards[shardcfg.Key2Shard(req.Key)]
+	if shard.Status == ShardNotOwned {
 		reply.Err = rpc.ErrWrongGroup
 		return reply
 	}
@@ -140,9 +138,10 @@ func (kv *KVServer) doGet(req *rpc.GetArgs) *rpc.GetReply {
 
 func (kv *KVServer) doPut(req *rpc.PutArgs) *rpc.PutReply {
 	reply := &rpc.PutReply{}
+	DPrintf("[doGet]: (%+v) s{%d}", req, kv.me)
 	// Check if shard belongs to this group
-	shard, wrong := kv.isWrongGroup(req.Key)
-	if wrong || shard.IsFrozen {
+	shard := kv.shards[shardcfg.Key2Shard(req.Key)]
+	if shard.Status != ShardOwned {
 		reply.Err = rpc.ErrWrongGroup
 		return reply
 	}
@@ -171,52 +170,69 @@ func (kv *KVServer) doPut(req *rpc.PutArgs) *rpc.PutReply {
 }
 
 func (kv *KVServer) doFreezeShard(args *shardrpc.FreezeShardArgs) *shardrpc.FreezeShardReply {
-	reply := &shardrpc.FreezeShardReply{}
-	if kv.currentConfigNum > args.Num {
-		reply.Err = rpc.ErrVersion
-		reply.Num = kv.currentConfigNum
-		return reply
+
+	shardID := args.Shard
+	shard := kv.shards[shardID]
+
+	if shard.ConfigNum > args.Num {
+		return &shardrpc.FreezeShardReply{}
 	}
-	kv.currentConfigNum = args.Num
-	reply.Num = args.Num
-	reply.Err = rpc.OK
-	reply.State = kv.encodeShards(args.Shard)
-	kv.shards[args.Shard].IsFrozen = true
+
+	shard.Status = ShardFrozen
+	reply := &shardrpc.FreezeShardReply{
+		Num:   args.Num,
+		Reply: rpc.Reply{Err: rpc.OK},
+		State: kv.encodeShards(args.Shard),
+	}
+	shard.ConfigNum = args.Num
+
 	return reply
 }
 
 // Install the supplied state for the specified shard.
 func (kv *KVServer) doInstallShard(args *shardrpc.InstallShardArgs) *shardrpc.InstallShardReply {
+	shardID := args.Shard
+	shard := kv.shards[shardID]
 	reply := &shardrpc.InstallShardReply{}
-	if kv.currentConfigNum > args.Num {
-		reply.Err = rpc.ErrVersion
+
+	if shard.ConfigNum > args.Num {
 		return reply
 	}
-	kv.currentConfigNum = args.Num
+
 	reply.Err = rpc.OK
-	kv.shards[args.Shard] = kv.decodeShards(args.State)
+	kv.shards[shardID] = kv.decodeShards(args.State)
+	kv.shards[shardID].Status = ShardOwned
+	kv.shards[shardID].ConfigNum = args.Num
+
 	return reply
 }
 
 // Delete the specified shard.
 func (kv *KVServer) doDeleteShard(args *shardrpc.DeleteShardArgs) *shardrpc.DeleteShardReply {
+	shardID := args.Shard
+	shard := kv.shards[shardID]
 	reply := &shardrpc.DeleteShardReply{}
-	if kv.currentConfigNum > args.Num {
-		reply.Err = rpc.ErrVersion
+
+	if shard.ConfigNum > args.Num {
 		return reply
 	}
-	kv.currentConfigNum = args.Num
+
+	kv.shards[args.Shard] = &ShardData{
+		Status:    ShardNotOwned,
+		KvStore:   nil,
+		Cache:     nil,
+		ConfigNum: args.Num,
+	}
 	reply.Err = rpc.OK
-	delete(kv.shards, args.Shard)
 	return reply
 }
 
 func (kv *KVServer) encodeShards(ShardId shardcfg.Tshid) []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-
+	shardCopy := kv.deepCopyShard(kv.shards[ShardId])
 	// Encode shard map and current config
-	if e.Encode(kv.shards[ShardId]) != nil {
+	if e.Encode(shardCopy) != nil {
 		log.Fatalf("encodeShards: failed to encode shards, (%+v)", kv.shards[ShardId])
 	}
 	return w.Bytes()
@@ -243,7 +259,9 @@ func (kv *KVServer) Snapshot() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 
-	e.Encode(kv.shards)
+	if e.Encode(kv.shards) != nil {
+		log.Fatalf("Snapshot: failed to encode shards, (%+v)", kv.shards)
+	}
 	return w.Bytes()
 }
 
@@ -256,26 +274,33 @@ func (kv *KVServer) Restore(data []byte) {
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 
-	var shards map[shardcfg.Tshid]*ShardData
+	var shards [shardcfg.NShards]*ShardData
+
 	if d.Decode(&shards) != nil {
-		log.Fatal("Decode error")
+		log.Fatal("Restore: Decode error")
 		return
 	}
 
 	kv.shards = shards
+
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
+	DPrintf("[Get]: (%+v) {%d}", args, kv.me)
+
 	err, res := kv.rsm.Submit(args)
 	if err == rpc.ErrWrongLeader {
 		reply.Err = err
 		return
 	}
+	DPrintf("[Server Get]: (%+v) s{%d}", res, kv.me)
+
 	*reply = *res.(*rpc.GetReply)
 }
 
 func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 	err, res := kv.rsm.Submit(args)
+	DPrintf("[Server Put]: (%+v) s{%d}", res, kv.me)
 	if err == rpc.ErrWrongLeader {
 		reply.Err = err
 		return
@@ -286,6 +311,7 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 // Freeze the specified shard (i.e., reject future Get/Puts for this
 // shard) and return the key/values stored in that shard.
 func (kv *KVServer) FreezeShard(args *shardrpc.FreezeShardArgs, reply *shardrpc.FreezeShardReply) {
+	DPrintf("[FreezeShard]: (%d) {%d}", args.Num, kv.me)
 	err, res := kv.rsm.Submit(args)
 	if err == rpc.ErrWrongLeader {
 		reply.Err = err
@@ -296,6 +322,8 @@ func (kv *KVServer) FreezeShard(args *shardrpc.FreezeShardArgs, reply *shardrpc.
 
 // Install the supplied state for the specified shard.
 func (kv *KVServer) InstallShard(args *shardrpc.InstallShardArgs, reply *shardrpc.InstallShardReply) {
+	DPrintf("[InstallShard]: (%d) {%d}", args.Num, kv.me)
+
 	err, res := kv.rsm.Submit(args)
 	if err == rpc.ErrWrongLeader {
 		reply.Err = err
@@ -307,6 +335,8 @@ func (kv *KVServer) InstallShard(args *shardrpc.InstallShardArgs, reply *shardrp
 
 // Delete the specified shard.
 func (kv *KVServer) DeleteShard(args *shardrpc.DeleteShardArgs, reply *shardrpc.DeleteShardReply) {
+	DPrintf("[DeleteShard]: (%d) {%d}", args.Num, kv.me)
+
 	err, res := kv.rsm.Submit(args)
 	if err == rpc.ErrWrongLeader {
 		reply.Err = err
@@ -355,21 +385,23 @@ func StartServerShardGrp(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, p
 	labgob.Register(&Cache{})
 	labgob.Register(&Vav{})
 	labgob.Register(&ShardData{})
-	kv := &KVServer{gid: gid, me: me, shards: make(map[shardcfg.Tshid]*ShardData)}
+	kv := &KVServer{gid: gid, me: me,
+		shards: [12]*ShardData{},
+	}
 
-	if gid == 1 {
-		for sid := range shardcfg.NShards {
-			kv.shards[shardcfg.Tshid(sid)] = &ShardData{
-				KvStore:  make(map[string]*Vav),
-				Cache:    make(map[string]*Cache),
-				IsFrozen: false,
-			}
+	for sid := range shardcfg.NShards {
+		kv.shards[sid] = &ShardData{
+			KvStore: make(map[string]*Vav),
+			Cache:   make(map[string]*Cache),
+		}
+		if gid == 1 {
+			kv.shards[sid].Status = ShardOwned
+		} else {
+			kv.shards[sid].Status = ShardNotOwned
 		}
 	}
 
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
-
-	// Your code here
 
 	return []tester.IService{kv, kv.rsm.Raft()}
 }

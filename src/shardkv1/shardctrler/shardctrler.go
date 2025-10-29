@@ -5,7 +5,10 @@ package shardctrler
 //
 
 import (
+	"math/rand"
+	"strconv"
 	"sync"
+	"time"
 
 	kvsrv "6.5840/kvsrv1"
 	"6.5840/kvsrv1/rpc"
@@ -23,12 +26,30 @@ type ShardCtrler struct {
 	killed int32 // set by Kill()
 
 	// Your data here.
-	mu sync.Mutex // Protects configuration updates
+	mu sync.Mutex
+	// You will have to modify this struct.
+	group2clerk map[tester.Tgid]*shardgrp.Clerk // group → group RPC client
+}
+
+func (sck *ShardCtrler) getClerkForShard(gid tester.Tgid, config *shardcfg.ShardConfig) *shardgrp.Clerk {
+	sck.mu.Lock()
+	defer sck.mu.Unlock()
+
+	// if exists, reuse it
+	if c, ok := sck.group2clerk[gid]; ok {
+		return c
+	}
+
+	// create a new client for this shard group
+	servers := config.Groups[gid]
+	newClerk := shardgrp.MakeClerk(sck.clnt, servers)
+	sck.group2clerk[gid] = newClerk
+	return newClerk
 }
 
 // Make a ShardCltler, which stores its state in a kvsrv.
 func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
-	sck := &ShardCtrler{clnt: clnt}
+	sck := &ShardCtrler{clnt: clnt, group2clerk: make(map[tester.Tgid]*shardgrp.Clerk)}
 	srv := tester.ServerName(tester.GRP0, 0)
 	sck.IKVClerk = kvsrv.MakeClerk(clnt, srv)
 	// Your code here.
@@ -39,6 +60,16 @@ func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
 // controller. In part A, this method doesn't need to do anything. In
 // B and C, this method implements recovery.
 func (sck *ShardCtrler) InitController() {
+	value, _, _ := sck.IKVClerk.Get("Config")
+	config := shardcfg.FromString(value)
+	shardgrp.DPrintf("[InitController]: %+v", config)
+	{
+		key := "NextConfig" + strconv.Itoa(int(config.Num)+1)
+		value, _, err := sck.IKVClerk.Get(key)
+		if err != rpc.ErrNoKey {
+			sck.ChangeConfigTo(shardcfg.FromString(value))
+		}
+	}
 }
 
 // Called once by the tester to supply the first configuration.  You
@@ -53,36 +84,57 @@ func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 }
 
 // Called by the tester to ask the controller to change the
-// configuration from the current one to new.  While the controller
+// configuration from the current o ne to new.  While the controller
 // changes the configuration it may be superseded by another
 // controller.
 func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
-	value, version, err := sck.IKVClerk.Get("Config")
-	shardgrp.DPrintf("[Query]: (%+v)", new)
-	if err != rpc.OK {
+	shardgrp.DPrintf("[ChangeConfigTo]: (%+v)", new)
+	value, version, _ := sck.IKVClerk.Get("Config")
+	oldCfg := shardcfg.FromString(value)
+	if new.Num < oldCfg.Num {
+		return
+	}
+	acquire, newConfig := sck.acquire(new)
+	if !acquire {
 		return
 	}
 
-	oldCfg := shardcfg.FromString(value)
+	var clnt *shardgrp.Clerk
 
-	for shard, newG := range new.Shards {
+	frozenShards := make(map[shardcfg.Tshid][]byte)
+	for shard, newG := range newConfig.Shards {
 		oldG := oldCfg.Shards[shard]
+		shardId := shardcfg.Tshid(shard)
+
 		if oldG != newG {
-			shardId := shardcfg.Tshid(shard)
-			_, srvs, _ := oldCfg.GidServers(shardId)
-			clnt := shardgrp.MakeClerk(sck.clnt, srvs)
-			data, _ := clnt.FreezeShard(shardId, new.Num)
-
-			{
-				_, srvs, _ := new.GidServers(shardId)
-				clnt := shardgrp.MakeClerk(sck.clnt, srvs)
-				clnt.InstallShard(shardId, data, new.Num)
-			}
-
-			clnt.DeleteShard(shardId, new.Num)
+			clnt = sck.getClerkForShard(oldG, oldCfg)
+			data, _ := clnt.FreezeShard(shardId, newConfig.Num)
+			frozenShards[shardId] = data
 		}
 	}
-	sck.IKVClerk.Put("Config", new.String(), version)
+
+	for shardId, data := range frozenShards {
+		newG := newConfig.Shards[shardId]
+		clnt = sck.getClerkForShard(newG, newConfig)
+		clnt.InstallShard(shardId, data, newConfig.Num)
+	}
+
+	for shardId := range frozenShards {
+		oldG := oldCfg.Shards[shardId]
+		if _, ok := newConfig.Groups[oldG]; ok {
+			clnt = sck.getClerkForShard(oldG, oldCfg)
+			clnt.DeleteShard(shardId, newConfig.Num)
+		} else {
+			sck.mu.Lock()
+			delete(sck.group2clerk, oldG)
+			sck.mu.Unlock()
+		}
+	}
+
+	sck.IKVClerk.Put("Config", newConfig.String(), version)
+	sck.finished(newConfig)
+	shardgrp.DPrintf("[Finished ChangeConfigTo]: (%+v)", newConfig.Num)
+
 }
 
 // Return the current configuration
@@ -90,4 +142,36 @@ func (sck *ShardCtrler) Query() *shardcfg.ShardConfig {
 	value, _, _ := sck.IKVClerk.Get("Config")
 	shCfg := shardcfg.FromString(value)
 	return shCfg
+}
+
+func (sck *ShardCtrler) acquire(new *shardcfg.ShardConfig) (bool, *shardcfg.ShardConfig) {
+	key := "NextConfig" + strconv.Itoa(int(new.Num))
+
+	err := sck.IKVClerk.Put(key, new.String(), 0)
+	if err == rpc.OK {
+		return true, new
+	}
+	start := time.Now() // Start timer
+	ms := 2200 + (rand.Int63() % 1000)
+	for {
+		// loop until the key's released
+		value, version, err := sck.IKVClerk.Get(key)
+		if err == rpc.OK {
+			if value == "Finished" {
+				return false, nil
+			} else if time.Since(start) > time.Duration(ms) {
+				err := sck.IKVClerk.Put(key, value, version)
+				if err == rpc.OK {
+					return true, shardcfg.FromString(value)
+				}
+				start = time.Now()
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+func (sck *ShardCtrler) finished(new *shardcfg.ShardConfig) {
+	key := "NextConfig" + strconv.Itoa(int(new.Num))
+	_, version, _ := sck.IKVClerk.Get(key)
+	sck.IKVClerk.Put(key, "Finished", version)
 }
