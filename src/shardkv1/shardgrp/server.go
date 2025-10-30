@@ -42,7 +42,6 @@ type ShardData struct {
 type ShardOperationState struct {
 	FreezeData  *shardrpc.FreezeShardReply
 	InstallData *shardrpc.InstallShardReply
-	// DeleteData  *shardrpc.DeleteShardReply
 }
 
 type KVServer struct {

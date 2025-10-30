@@ -10,6 +10,7 @@ package shardkv
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"6.5840/kvsrv1/rpc"
 	kvtest "6.5840/kvtest1"
@@ -17,6 +18,7 @@ import (
 	"6.5840/shardkv1/shardctrler"
 	"6.5840/shardkv1/shardgrp"
 	tester "6.5840/tester1"
+	"github.com/google/uuid"
 )
 
 type Clerk struct {
@@ -26,6 +28,8 @@ type Clerk struct {
 	// You will have to modify this struct.
 	group2clerk map[tester.Tgid]*shardgrp.Clerk // group → group RPC client
 	config      *shardcfg.ShardConfig
+	requestId   int64
+	clientID    string
 }
 
 // The tester calls MakeClerk and passes in a shardctrler so that
@@ -36,6 +40,7 @@ func MakeClerk(clnt *tester.Clnt, sck *shardctrler.ShardCtrler) kvtest.IKVClerk 
 		sck:         sck,
 		group2clerk: make(map[tester.Tgid]*shardgrp.Clerk),
 		config:      sck.Query(), // initial config
+		clientID:    uuid.New().String(),
 	}
 	// You'll have to add code here.
 	return ck
@@ -48,9 +53,11 @@ func MakeClerk(clnt *tester.Clnt, sck *shardctrler.ShardCtrler) kvtest.IKVClerk 
 // calling shardgrp.MakeClerk(ck.clnt, servers).
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	shard := shardcfg.Key2Shard(key)
+	reqId := atomic.AddInt64(&ck.requestId, 1)
+
 	for {
 		clerk := ck.getClerkForShard(shard)
-		value, version, err := clerk.Get(key)
+		value, version, err := clerk.Get(key, reqId)
 
 		if err == rpc.ErrWrongGroup {
 			ck.refreshConfig()
@@ -64,10 +71,10 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 // Put a key to a shard group.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	shard := shardcfg.Key2Shard(key)
-
+	reqId := atomic.AddInt64(&ck.requestId, 1)
 	for {
 		clerk := ck.getClerkForShard(shard)
-		err := clerk.Put(key, value, version)
+		err := clerk.Put(key, value, version, reqId)
 
 		if err == rpc.ErrWrongGroup {
 			ck.refreshConfig()
@@ -83,11 +90,9 @@ func (ck *Clerk) refreshConfig() {
 
 	newConfig := ck.sck.Query()
 
-	shardgrp.DPrintf("[refreshConfig]: currentConfig=(%+v)", ck.config)
 	if newConfig.Num == ck.config.Num {
 		return
 	}
-	shardgrp.DPrintf("[refreshConfig]: THE CONFIG WAS CHANCED")
 
 	newGroup2Clerk := make(map[tester.Tgid]*shardgrp.Clerk)
 
@@ -112,7 +117,7 @@ func (ck *Clerk) getClerkForShard(shard shardcfg.Tshid) *shardgrp.Clerk {
 	}
 
 	// create a new client for this shard group
-	newClerk := shardgrp.MakeClerk(ck.clnt, servers)
+	newClerk := shardgrp.MakeClerk(ck.clnt, servers, ck.clientID)
 	ck.group2clerk[gid] = newClerk
 	return newClerk
 }

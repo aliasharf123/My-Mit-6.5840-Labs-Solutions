@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	kvsrv "6.5840/kvsrv1"
@@ -16,6 +17,7 @@ import (
 	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp"
 	tester "6.5840/tester1"
+	"github.com/google/uuid"
 )
 
 const (
@@ -33,6 +35,8 @@ type ShardCtrler struct {
 	mu sync.Mutex
 	// You will have to modify this struct.
 	group2clerk map[tester.Tgid]*shardgrp.Clerk // group → group RPC client
+	requestId   int64
+	clientID    string
 }
 
 func (sck *ShardCtrler) getClerkForShard(gid tester.Tgid, config *shardcfg.ShardConfig) *shardgrp.Clerk {
@@ -46,14 +50,14 @@ func (sck *ShardCtrler) getClerkForShard(gid tester.Tgid, config *shardcfg.Shard
 
 	// create a new client for this shard group
 	servers := config.Groups[gid]
-	newClerk := shardgrp.MakeClerk(sck.clnt, servers)
+	newClerk := shardgrp.MakeClerk(sck.clnt, servers, sck.clientID)
 	sck.group2clerk[gid] = newClerk
 	return newClerk
 }
 
 // Make a ShardCltler, which stores its state in a kvsrv.
 func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
-	sck := &ShardCtrler{clnt: clnt, group2clerk: make(map[tester.Tgid]*shardgrp.Clerk)}
+	sck := &ShardCtrler{clnt: clnt, group2clerk: make(map[tester.Tgid]*shardgrp.Clerk), clientID: uuid.New().String()}
 	srv := tester.ServerName(tester.GRP0, 0)
 	sck.IKVClerk = kvsrv.MakeClerk(clnt, srv)
 	// Your code here.
@@ -178,10 +182,10 @@ func (sck *ShardCtrler) requestFreezeShard(oldG tester.Tgid,
 	oldCfg *shardcfg.ShardConfig,
 	shardId shardcfg.Tshid,
 	new *shardcfg.ShardConfig) ([]byte, bool) {
-
+	reqId := atomic.AddInt64(&sck.requestId, 1)
 	clnt := sck.getClerkForShard(oldG, oldCfg)
 	for {
-		data, err := clnt.FreezeShard(shardId, new.Num)
+		data, err := clnt.FreezeShard(shardId, new.Num, reqId)
 
 		if err == rpc.ErrMaybe {
 			value, _, _ := sck.IKVClerk.Get("NextConfig" + strconv.Itoa(int(new.Num)))
@@ -198,9 +202,9 @@ func (sck *ShardCtrler) requestInstallShard(shardId shardcfg.Tshid,
 	data []byte) bool {
 	newG := new.Shards[shardId]
 	clnt := sck.getClerkForShard(newG, new)
-
+	reqId := atomic.AddInt64(&sck.requestId, 1)
 	for {
-		err := clnt.InstallShard(shardId, data, new.Num)
+		err := clnt.InstallShard(shardId, data, new.Num, reqId)
 		if err == rpc.ErrMaybe {
 			value, _, _ := sck.IKVClerk.Get("NextConfig" + strconv.Itoa(int(new.Num)))
 			if value == FINISHED {
@@ -215,12 +219,13 @@ func (sck *ShardCtrler) requestDeleteShard(oldCfg *shardcfg.ShardConfig,
 	shardId shardcfg.Tshid,
 	new *shardcfg.ShardConfig) bool {
 	oldG := oldCfg.Shards[shardId]
+	reqId := atomic.AddInt64(&sck.requestId, 1)
 	var isFinished bool
 	if _, ok := new.Groups[oldG]; ok {
 		clnt := sck.getClerkForShard(oldG, oldCfg)
 
 		for {
-			err := clnt.DeleteShard(shardId, new.Num)
+			err := clnt.DeleteShard(shardId, new.Num, reqId)
 			if err == rpc.ErrMaybe {
 				value, _, _ := sck.IKVClerk.Get("NextConfig" + strconv.Itoa(int(new.Num)))
 				if value == FINISHED {

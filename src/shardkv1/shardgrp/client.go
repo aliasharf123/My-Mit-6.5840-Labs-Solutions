@@ -7,7 +7,6 @@ import (
 	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp/shardrpc"
 	tester "6.5840/tester1"
-	"github.com/google/uuid"
 )
 
 type Clerk struct {
@@ -15,17 +14,14 @@ type Clerk struct {
 	servers []string
 	// You will have to modify this struct.
 	leaderId int32 // remember the last known leader
-
-	requestId int64
-	clientID  string
+	clientID string
 }
 
-func MakeClerk(clnt *tester.Clnt, servers []string) *Clerk {
-	ck := &Clerk{clnt: clnt, servers: servers, clientID: uuid.New().String()}
+func MakeClerk(clnt *tester.Clnt, servers []string, clientId string) *Clerk {
+	ck := &Clerk{clnt: clnt, servers: servers, clientID: clientId}
 	return ck
 }
-func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
-	reqId := atomic.AddInt64(&ck.requestId, 1)
+func (ck *Clerk) Get(key string, reqId int64) (string, rpc.Tversion, rpc.Err) {
 	args := rpc.GetArgs{Args: rpc.Args{Key: key},
 		ClientMeta: rpc.ClientMeta{ClientId: ck.clientID, Seq: reqId}}
 	var reply rpc.GetReply
@@ -41,9 +37,7 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	}
 }
 
-func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
-	// You will have to modify this function.
-	reqId := atomic.AddInt64(&ck.requestId, 1)
+func (ck *Clerk) Put(key string, value string, version rpc.Tversion, reqId int64) rpc.Err {
 	args := rpc.PutArgs{
 		Value:      value,
 		Args:       rpc.Args{Key: key},
@@ -68,7 +62,6 @@ func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
 	}
 }
 func (ck *Clerk) callLeader(rpcValue string, args interface{}, reply rpc.ReplyI) bool {
-
 	leader := int(atomic.LoadInt32(&ck.leaderId))
 	for i := 0; i < len(ck.servers); i++ {
 		// cycle from known leaderId
@@ -87,8 +80,7 @@ func (ck *Clerk) callLeader(rpcValue string, args interface{}, reply rpc.ReplyI)
 	return false
 }
 
-func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.Err) {
-	reqId := atomic.AddInt64(&ck.requestId, 1)
+func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum, reqId int64) ([]byte, rpc.Err) {
 	args := shardrpc.FreezeShardArgs{
 		Shard:      s,
 		Num:        num,
@@ -105,8 +97,7 @@ func (ck *Clerk) FreezeShard(s shardcfg.Tshid, num shardcfg.Tnum) ([]byte, rpc.E
 	}
 }
 
-func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum) rpc.Err {
-	reqId := atomic.AddInt64(&ck.requestId, 1)
+func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum, reqId int64) rpc.Err {
 	args := shardrpc.InstallShardArgs{
 		Shard:      s,
 		Num:        num,
@@ -125,8 +116,7 @@ func (ck *Clerk) InstallShard(s shardcfg.Tshid, state []byte, num shardcfg.Tnum)
 	}
 }
 
-func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum) rpc.Err {
-	reqId := atomic.AddInt64(&ck.requestId, 1)
+func (ck *Clerk) DeleteShard(s shardcfg.Tshid, num shardcfg.Tnum, reqId int64) rpc.Err {
 	args := shardrpc.DeleteShardArgs{
 		Shard:      s,
 		Num:        num,
